@@ -1,0 +1,4 @@
+Before you run the program, download these assets:
+	
+	1. Airplane 3D model:
+		https://free3d.com/3d-model/airplane-v2--549103.html
