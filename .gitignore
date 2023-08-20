@@ -1,3 +1,5 @@
 /build
 /Assets/*
 !/Assets/AssetSources.txt
+/Dependencies/boost_1_83_0
+/.vscode

@@ -1,6 +1,9 @@
 [submodule "Dependencies/Cala"]
 	path = Dependencies/Cala
 	url = https://github.com/dominikcondric/Cala.git
-[submodule "Dependencies/OBJLoader"]
-	path = Dependencies/OBJLoader
-	url = https://github.com/Bly7/OBJ-Loader.git
+[submodule "Dependencies/matplotlib"]
+	path = Dependencies/matplotlib
+	url = https://github.com/lava/matplotlib-cpp.git
+[submodule "Dependencies/cgal"]
+	path = Dependencies/cgal
+	url = https://github.com/CGAL/cgal.git

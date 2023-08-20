@@ -1,6 +1,2 @@
 add_subdirectory(Cala)
-
-target_include_directories(EvolutionaryMeshOptimization
-	PRIVATE
-		OBJLoader/Source/
-)
+add_subdirectory(matplotlib)
