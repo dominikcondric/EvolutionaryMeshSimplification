@@ -25,7 +25,9 @@ std::vector<std::array<uint64_t, 3>> MathUtils::triangulatePolygon(const std::ve
 	CGAL::advancing_front_surface_reconstruction(
 		cgalPolygonVertices.begin(),
 		cgalPolygonVertices.end(),
-		std::back_inserter(cgalTriangleIndices)
+		std::back_inserter(cgalTriangleIndices),
+        10.0, 
+        0.8
 	);
 	
 	return cgalTriangleIndices;

@@ -1,13 +1,28 @@
 #include "ModelOptimizer.h"
 #include <unordered_map>
 #include <set>
-#include <set>
+#include <stack>
 #include <algorithm>
 #include <iostream>
+#include <random>
 #include <glm/gtc/random.hpp>
 #include <glm/gtc/constants.hpp>
 #include "MathUtils.h"
 #include <matplotlibcpp.h>
+#include <mutex>
+
+int generateRandomIntInRange(int min = 0, int max = INT_MAX)
+{
+	static thread_local std::mt19937 rng(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+	std::uniform_int_distribution<uint32_t> dist(min, max);
+	int random = dist(rng);
+	return random;
+}
+
+float generateRandomFloat()
+{
+	return generateRandomIntInRange() / (float)INT_MAX;
+}
 
 void ModelOptimizer::optimize(Cala::Model* model, uint32_t _generationCount, uint32_t _populationCount,
 		uint32_t _offspringCount, float _mutationProbability, uint32_t _tournamentParticipantsCount)
@@ -21,7 +36,6 @@ void ModelOptimizer::optimize(Cala::Model* model, uint32_t _generationCount, uin
 	std::cout << "Optimizing model: " << model->getModelName();
 	std::vector<Solution> population = generateInitialPopulation(model, populationCount);
 
-
 	TwoDimVector<uint32_t> paretoFronts = performNonDominatedSort(population);
 	for (auto& front : paretoFronts)
 	{
@@ -34,7 +48,8 @@ void ModelOptimizer::optimize(Cala::Model* model, uint32_t _generationCount, uin
 	for (uint32_t i = 0; i < generationCount; ++i)
 	{
 		std::cout << "\n\tGeneration " << i+1 << ": " << '\n';
-		generateOffspring(model, population);
+		std::vector<Solution> offspring = generateOffspring(model, population);
+		population.insert(population.end(), offspring.begin(), offspring.end());
 
 		for (Solution& s : population)
 			s.reset();
@@ -51,8 +66,10 @@ void ModelOptimizer::optimize(Cala::Model* model, uint32_t _generationCount, uin
 		population =  nextGeneration(population, paretoFronts);
 	}
 
-	std::cout << "\n1. pareto front: \n";
 	const uint32_t vertexCount = model->getPositions().size();
+	plotParetoFronts(paretoFronts, population, vertexCount);
+
+	std::cout << "\n1. pareto front: \n";
 	for (int i = 0; i < paretoFronts[0].size(); ++i)
 	{
 		const Solution& s = population[paretoFronts[0][i]];
@@ -65,15 +82,6 @@ void ModelOptimizer::optimize(Cala::Model* model, uint32_t _generationCount, uin
 		std::cout << "\n\t\tChoose a solution from 1. front (e.g. 0, 1, 4, 6...): ";
 		std::cin >> choice;
 	} while (choice >= paretoFronts[0].size());
-
-	try 
-	{
-		plotParetoFronts(paretoFronts, population, vertexCount);
-	}
-	catch (std::exception& e)
-	{
-		std::cout << e.what() << std::endl;
-	}
 
 	regenerateModel(model, population[paretoFronts[0][choice]]);
 	std::cout << "\n\tPercentage of original vertices: " << model->getPositions().size() * 100.f / (float)vertexCount << '\n' << std::endl;
@@ -108,10 +116,14 @@ void ModelOptimizer::regenerateModel(Cala::Model* model, Solution& solution) con
 std::vector<ModelOptimizer::Solution> ModelOptimizer::generateInitialPopulation(const Cala::Model* model, uint32_t populationCount) const
 {
 	std::vector<Solution> population;
+	std::vector<std::future<Solution>> futures;
 	population.reserve(populationCount);
 	for (uint32_t i = 0; i < populationCount; ++i)
+		futures.push_back(std::async(std::launch::async, generateGenotype, this, model));
+
+	for (uint32_t i = 0; i < populationCount; ++i)
 	{
-		population.emplace_back(generateGenotype(model));
+		population.push_back(futures[i].get());
 		std::cout << "\n\tGenerating solution " << i+1;
 	}
 
@@ -123,10 +135,11 @@ ModelOptimizer::Solution ModelOptimizer::generateGenotype(const Cala::Model* mod
 	uint32_t vertexCount = model->getPositions().size();
 	Solution solution;
 
-	float threshold = glm::linearRand(0.2f, 1.f);
+	float threshold = generateRandomFloat();
+	threshold = 0.1f + 0.9f * threshold;
 	for (int i = 0; i < vertexCount; ++i)
 	{
-		if (glm::linearRand(0.f, 1.f) > threshold)
+		if (generateRandomFloat() > threshold)
 			solution.verticesToRemove.insert(i);
 	}
 
@@ -134,19 +147,26 @@ ModelOptimizer::Solution ModelOptimizer::generateGenotype(const Cala::Model* mod
 	return solution;
 }
 
-void ModelOptimizer::createPolygonRecursively(const std::vector<std::set<uint32_t>>& neighboursTable, std::unordered_set<uint32_t>& verticesToRemove, uint32_t vertexToRemove, std::unordered_set<uint32_t>& removedVerticesPerPolygon, std::set<uint32_t>& polygonSet) const
+void ModelOptimizer::createPolygon(const std::vector<std::set<uint32_t>>& neighboursTable, std::unordered_set<uint32_t>& verticesToRemove, uint32_t vertexToRemove, std::unordered_set<uint32_t>& removedVerticesPerPolygon, std::set<uint32_t>& polygonSet) const
 {
-	removedVerticesPerPolygon.insert(vertexToRemove);
-	verticesToRemove.erase(vertexToRemove);
-	
-	for (const uint32_t neighbour : neighboursTable[vertexToRemove])
+	std::stack<uint32_t> verticesToProcess({ vertexToRemove });
+	while (!verticesToProcess.empty())
 	{
-		if (removedVerticesPerPolygon.find(neighbour) == removedVerticesPerPolygon.end()) // If vertex is not added in removed vertices for current polygon
+		vertexToRemove = verticesToProcess.top();
+		verticesToProcess.pop();
+		removedVerticesPerPolygon.insert(vertexToRemove);
+		verticesToRemove.erase(vertexToRemove);
+		for (const uint32_t neighbour : neighboursTable[vertexToRemove])
 		{
-			if (verticesToRemove.find(neighbour) == verticesToRemove.end()) // If vertex is not in removed vertices list
-				polygonSet.insert(neighbour);
-			else
-				createPolygonRecursively(neighboursTable, verticesToRemove, neighbour, removedVerticesPerPolygon, polygonSet);	
+			if (removedVerticesPerPolygon.find(neighbour) == removedVerticesPerPolygon.end()) // If vertex is not added in removed vertices for current polygon
+			{
+				if (verticesToRemove.find(neighbour) == verticesToRemove.end()) // If vertex is not in removed vertices list
+					polygonSet.insert(neighbour);
+				else
+				{
+					verticesToProcess.push(neighbour);
+				}
+			}
 		}
 	}
 }
@@ -157,10 +177,7 @@ void ModelOptimizer::generateIndicesAndError(const Cala::Model* model, Solution&
 	const std::vector<uint32_t>& modelIndices = model->getIndices();
 	const std::vector<glm::vec3>& modelPositions = model->getPositions();
 	std::vector<std::set<uint32_t>> neighboursTable(vertexCount, std::set<uint32_t>()); // table of neighbours
-	// std::vector<std::set<uint32_t>> indexMap(vertexCount, std::set<uint32_t>());  // index of each vertex in indices array
-	std::vector<std::pair<std::unordered_set<uint32_t>, std::set<uint32_t>>> polygonSetsPerRemovedVertices;
-	// std::set<uint32_t> indicesToDelete;
-	// std::vector<std::set<uint32_t>> triangleIndicesPerVertex(vertexCount);
+	std::unordered_map<uint32_t, float> errors;
 
 	for (uint32_t i = 0; i < modelIndices.size() - 2; i += 3)
 	{
@@ -187,13 +204,9 @@ void ModelOptimizer::generateIndicesAndError(const Cala::Model* model, Solution&
 		uint32_t vertexToRemove = *verticesToRemoveCopy.begin();
 		std::unordered_set<uint32_t> verticesToRemovePerPolygon;
 		std::set<uint32_t> polygonSet;
-		createPolygonRecursively(neighboursTable, verticesToRemoveCopy, vertexToRemove, verticesToRemovePerPolygon, polygonSet);
-		polygonSetsPerRemovedVertices.emplace_back(verticesToRemovePerPolygon, polygonSet);
-	}
+		createPolygon(neighboursTable, verticesToRemoveCopy, vertexToRemove, verticesToRemovePerPolygon, polygonSet);
 
-	for (const auto& entry : polygonSetsPerRemovedVertices)
-	{
-		std::vector<uint32_t> polygonVerticesArray(entry.second.begin(), entry.second.end());
+		std::vector<uint32_t> polygonVerticesArray(polygonSet.begin(), polygonSet.end());
 		std::vector<std::array<uint64_t, 3>> newTriangles = MathUtils::triangulatePolygon(polygonVerticesArray, modelPositions);
 		for (const auto& newTriangle : newTriangles)
 		{
@@ -224,171 +237,81 @@ void ModelOptimizer::generateIndicesAndError(const Cala::Model* model, Solution&
 				newTrianglePoints[2] = modelPositions[newTriangleIndices[2]];
 			}
 
-			for (const uint32_t vertexToRemove : entry.first)
-				solution.error += calculateSquareError(modelPositions[vertexToRemove], newTrianglePoints);
+			for (const uint32_t vertexToRemove : verticesToRemovePerPolygon)
+			{
+				float error = calculateSquareError(modelPositions[vertexToRemove], newTrianglePoints);
+				if (error >= 0.f && (errors.find(vertexToRemove) == errors.end() || error < errors[vertexToRemove]))
+					errors[vertexToRemove] = error;
+			}
 
 			solution.newIndices.push_back(newTriangleIndices[0]);
 			solution.newIndices.push_back(newTriangleIndices[1]);
 			solution.newIndices.push_back(newTriangleIndices[2]);
 		}
 	}
-	// Generate new pivot map
-	// bool completed = true;
-	// int counter = 0;
-	// int previousCounter = vertexCount;
-	// do {
-	// 	completed = true;
-	// 	counter = 0;
-	// 	for (uint32_t vertexToRemove : solution.verticesToRemove)
-	// 	{
-	// 		if (newPivotMap.find(vertexToRemove) == newPivotMap.end())
-	// 		{
-	// 			/*
-	// 			* For every vertex that should be removed do:
-	// 			*	- Pick a new pivot vertex from its neighbour table
-	// 			*	- For every neighbour of removing vertex remove removing vertex index
-	// 			*	- For every neighbour that is not a pivot, add pivot as a new neighbour
-	// 			*	- For pivot add all other neighbours as new neighbour
-	// 			*/
-	// 			auto& neighboursList = neighboursTable[vertexToRemove];
-	// 			int pivot = -1;
-	// 			float smallestDistance = (float)INT_MAX;
-	// 			const glm::vec3& oldVertexPosition = modelPositions[vertexToRemove];
 
-	// 			for (const int neighbour : neighboursList)
-	// 			{
-	// 				const glm::vec3& neighbourVertexPosition = modelPositions[neighbour];
-	// 				float dist = glm::distance(oldVertexPosition, neighbourVertexPosition);
-	// 				if (dist < smallestDistance && solution.verticesToRemove.find(pivot) == solution.verticesToRemove.end() 
-	// 					&& pivot != vertexToRemove)
-	// 				{
-	// 					pivot = neighbour;
-	// 					smallestDistance = dist;
-	// 				}
-	// 			}
-
-	// 			if (pivot == -1)
-	// 			{
-	// 				completed = false;
-	// 				continue;
-	// 			}
-
-	// 			++counter;
-	// 			newPivotMap[vertexToRemove] = pivot;
-	// 			triangleIndicesPerVertex[pivot].insert(triangleIndicesPerVertex[vertexToRemove].begin(), triangleIndicesPerVertex[vertexToRemove].end());
-
-	// 			for (const auto neighbour : neighboursList)
-	// 			{
-	// 				neighboursTable[neighbour].erase(vertexToRemove);
-
-	// 				if (neighbour != pivot)
-	// 				{
-	// 					neighboursTable[neighbour].insert(pivot);
-	// 					neighboursTable[pivot].insert(neighbour);
-	// 				}
-	// 			}
-
-	// 			/*
-	// 			* Find the first index of a triangle containing removing vertex
-	// 			* Replace removing vertex index from indices list with new pivot vertex index
-	// 			* If the triangle already contains the new pivot vertex, add it to list of triangles to remove and
-	// 			remove trinagles vertex indices from indexMap
-	// 			*/
-	// 			for (const uint32_t index : indexMap[vertexToRemove])
-	// 			{
-	// 				solution.newIndices[index] = pivot;
-	// 				indexMap[pivot].insert(index);
-	// 			}
-
-	// 			indexMap[vertexToRemove].clear(); // Delete all indices of a vertex-to-remove
-	// 		}
-	// 	}
-
-	// 	if (counter == previousCounter)
-	// 		return false;
-		
-	// 	previousCounter = counter;
-	// } while (!completed);
-
-	// // Calculating square errors
-	// for (const auto& entry : newPivotMap)
-	// {
-	// 	const uint32_t removingVertex = entry.first;
-	// 	const uint32_t pivot = entry.second;
-	// 	for (const uint32_t triangleIndex : triangleIndicesPerVertex[pivot])
-	// 	{
-	// 		uint32_t triangleVertexIndices[3] = {
-	// 			solution.newIndices[triangleIndex],
-	// 			solution.newIndices[triangleIndex + 1],
-	// 			solution.newIndices[triangleIndex + 2]
-	// 		};
-
-	// 		float error = calculateSquareError(model->getPositions(), removingVertex, triangleVertexIndices);
-	// 		if (error < 0.f)
-	// 		{
-	// 			indicesToDelete.insert(triangleIndex);
-	// 		}
-	// 		else
-	// 		{
-	// 			solution.error += error;
-	// 		}
-	// 	}
-	// }
-
-	// /*
-	// * Remove trinagles which decomposed to a line because of two vertices being the same (pivot) vertex
-	// * Sorting is needed to ensure removal from highest to lowest index triangles
-	// */
-	// for (auto iterator = indicesToDelete.rbegin(); iterator != indicesToDelete.rend(); iterator++)
-	// {
-	// 	auto first = solution.newIndices.begin() + *iterator;
-	// 	solution.newIndices.erase(first, first + 3);
-	// }
-
-	// return true;
+	solution.error = std::accumulate(errors.begin(), errors.end(), 0.f, [](float res, const std::pair<uint32_t, float>& el) {
+		return res + el.second;
+	});
 }
 
-void ModelOptimizer::generateOffspring(const Cala::Model* model, std::vector<Solution>& population) const
+std::vector<ModelOptimizer::Solution> ModelOptimizer::generateOffspring(const Cala::Model* model, const std::vector<Solution>& population) const
 {
+	std::vector<std::future<Solution>> futures;
+	for (uint32_t i = 0; i < offspringCount; ++i)
+	{
+		futures.push_back(std::async(std::launch::async, generateChild, this, model, population));
+	}
+
 	std::vector<Solution> offspring;
 	for (uint32_t i = 0; i < offspringCount; ++i)
 	{
+		offspring.push_back(futures[i].get());
 		std::cout << "\t\tGenerating offspring " << i + 1 << "...\n";
-		Solution solution;
-		uint32_t firstParentIndex = selectParent(population);
-		uint32_t secondParentIndex = firstParentIndex;
-		while (secondParentIndex == firstParentIndex)
-			secondParentIndex = selectParent(population);
-
-		const std::unordered_set<uint32_t>& firstParentBitstring = population[firstParentIndex].verticesToRemove;
-		const std::unordered_set<uint32_t>& secondParentBitstring = population[secondParentIndex].verticesToRemove;
-
-		for (uint32_t j = 0; j < model->getPositions().size(); ++j)
-		{
-			if ((glm::linearRand(0.f, 1.f) < 0.5f && firstParentBitstring.find(j) != solution.verticesToRemove.end())
-				|| (glm::linearRand(0.f, 1.f) > 0.5f && secondParentBitstring.find(j) != solution.verticesToRemove.end()))
-				solution.verticesToRemove.insert(j);
-		}
-
-		if (glm::linearRand(0.f, 1.f) < mutationProbability)
-		{
-			mutate(model->getPositions().size(), solution.verticesToRemove);
-		}
-
-		generateIndicesAndError(model, solution);
 	}
 
-	population.insert(population.end(), offspring.begin(), offspring.end());
+	return offspring;
+}
+
+ModelOptimizer::Solution ModelOptimizer::generateChild(const Cala::Model* model, const std::vector<Solution>& population) const
+{
+	Solution solution;
+	uint32_t firstParentIndex = selectParent(population);
+	uint32_t secondParentIndex = firstParentIndex;
+	while (secondParentIndex == firstParentIndex)
+		secondParentIndex = selectParent(population);
+
+	const std::unordered_set<uint32_t>& firstParentBitstring = population[firstParentIndex].verticesToRemove;
+	const std::unordered_set<uint32_t>& secondParentBitstring = population[secondParentIndex].verticesToRemove;
+
+	for (uint32_t j = 0; j < model->getPositions().size(); ++j)
+	{
+		float randomFloat = generateRandomFloat();
+		if ((randomFloat < 0.5f && firstParentBitstring.find(j) != solution.verticesToRemove.end())
+			|| (randomFloat > 0.5f && secondParentBitstring.find(j) != solution.verticesToRemove.end()))
+			solution.verticesToRemove.insert(j);
+	}
+
+
+	float randomFloat = generateRandomFloat();
+	if (randomFloat < mutationProbability)
+	{
+		mutate(model->getPositions().size(), solution.verticesToRemove);
+	}
+
+	generateIndicesAndError(model, solution);
+
+	return solution;
 }
 
 uint32_t ModelOptimizer::selectParent(const std::vector<Solution>& population) const
 {
-	uint32_t bestIndex = glm::linearRand<uint32_t>(0, (uint32_t)population.size() - 1);
+	uint32_t bestIndex = generateRandomIntInRange(0, (uint32_t)population.size() - 1);
 	const Solution* best = &population[bestIndex];
 
 	for (uint32_t i = 0; i < tournamentParticipantsCount - 1; ++i)
 	{
-		uint32_t randomIndex = glm::linearRand<uint32_t>(0, (uint32_t)population.size() - 1);
+		uint32_t randomIndex = generateRandomIntInRange(0, (uint32_t)population.size() - 1);
 		const Solution* participant = &population[randomIndex];
 
 		if (participant->rank < best->rank || (participant->rank == best->rank && participant->distance > best->distance))
@@ -414,7 +337,7 @@ float ModelOptimizer::calculateSquareError(const glm::vec3& vertexPosition, cons
 	}
 	else
 	{
-		return 0.f;
+		return -1.f;
 	}
 }
 
