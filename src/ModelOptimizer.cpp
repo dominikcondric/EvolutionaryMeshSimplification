@@ -24,7 +24,7 @@ float generateRandomFloat()
 	return generateRandomIntInRange() / (float)INT_MAX;
 }
 
-void ModelOptimizer::optimize(Cala::Model* model, uint32_t _generationCount, uint32_t _populationCount,
+std::vector<Cala::Model> ModelOptimizer::optimize(const Cala::Model* model, uint32_t _generationCount, uint32_t _populationCount,
 		uint32_t _offspringCount, float _mutationProbability, uint32_t _tournamentParticipantsCount)
 {
 	generationCount = _generationCount;
@@ -69,25 +69,30 @@ void ModelOptimizer::optimize(Cala::Model* model, uint32_t _generationCount, uin
 	const uint32_t vertexCount = model->getPositions().size();
 	plotParetoFronts(paretoFronts, population, vertexCount);
 
-	std::cout << "\n1. pareto front: \n";
-	for (int i = 0; i < paretoFronts[0].size(); ++i)
+	std::sort(paretoFronts[0].begin(), paretoFronts[0].end(), [&population](uint32_t index1, uint32_t index2) {
+		return population[index1].verticesToRemove.size() < population[index2].verticesToRemove.size();
+	});
+
+	std::cout << "1. pareto front size: " << paretoFronts[0].size() << '\n';
+	uint32_t nrOfSolutions = 0;
+	do {
+		std::cout << "Number of LOD levels: ";
+		std::cin >> nrOfSolutions;
+	} while (nrOfSolutions == 0 || nrOfSolutions > paretoFronts[0].size());
+
+	std::vector<Cala::Model> models;
+	uint32_t step = paretoFronts[0].size() / nrOfSolutions;
+	for (int i = 0; i < nrOfSolutions; ++i)
 	{
-		const Solution& s = population[paretoFronts[0][i]];
-		std::cout << "\t\t" << i << " - error: " << s.error << 
-			", vertices kept: " << (vertexCount - s.verticesToRemove.size()) * 100.f / vertexCount << "%\n";
+		auto& s = population[paretoFronts[0][step*i]];
+		std::cout << s.error << ", " << s.verticesToRemove.size() << std::endl;
+		models.push_back(regenerateModel(model, s));
 	}
 
-	uint32_t choice;
-	do {
-		std::cout << "\n\t\tChoose a solution from 1. front (e.g. 0, 1, 4, 6...): ";
-		std::cin >> choice;
-	} while (choice >= paretoFronts[0].size());
-
-	regenerateModel(model, population[paretoFronts[0][choice]]);
-	std::cout << "\n\tPercentage of original vertices: " << model->getPositions().size() * 100.f / (float)vertexCount << '\n' << std::endl;
+	return models;
 }
 
-void ModelOptimizer::regenerateModel(Cala::Model* model, Solution& solution) const
+Cala::Model ModelOptimizer::regenerateModel(const Cala::Model* model, Solution& solution) const
 {
 	std::vector<glm::vec3> positions;
 	std::vector<glm::vec3> normals;
@@ -110,7 +115,9 @@ void ModelOptimizer::regenerateModel(Cala::Model* model, Solution& solution) con
 		index = oldToNewIndexMapping[index];
 	}
 
-	model->loadCustomModel(positions, normals, textureCoordinates, solution.newIndices, model->getDrawingMode(), "", "");
+	Cala::Model newModel(false);
+	newModel.loadCustomModel(positions, normals, textureCoordinates, solution.newIndices, model->getDrawingMode(), model->getModelName(), model->getModelPath());
+	return newModel;
 }
 
 std::vector<ModelOptimizer::Solution> ModelOptimizer::generateInitialPopulation(const Cala::Model* model, uint32_t populationCount) const
@@ -205,7 +212,7 @@ void ModelOptimizer::generateIndicesAndError(const Cala::Model* model, Solution&
 		std::unordered_set<uint32_t> verticesToRemovePerPolygon;
 		std::set<uint32_t> polygonSet;
 		createPolygon(neighboursTable, verticesToRemoveCopy, vertexToRemove, verticesToRemovePerPolygon, polygonSet);
-
+		// std::vector<uint32_t> polygonVerticesArray = findOrderedPolyline(neighboursTable, *polygonSet.begin(), { *polygonSet.begin() }, polygonSet)
 		std::vector<uint32_t> polygonVerticesArray(polygonSet.begin(), polygonSet.end());
 		std::vector<std::array<uint64_t, 3>> newTriangles = MathUtils::triangulatePolygon(polygonVerticesArray, modelPositions);
 		for (const auto& newTriangle : newTriangles)
@@ -480,7 +487,32 @@ void ModelOptimizer::plotParetoFronts(const TwoDimVector<uint32_t> &paretoFronts
 
 	matplotlibcpp::legend();
 	matplotlibcpp::show(true);
-	std::cout << paretoFronts.size() << std::endl;
+}
+
+std::vector<uint32_t> ModelOptimizer::findOrderedPolyline(const std::vector<std::set<uint32_t>>& neighboursTable, uint32_t currentVertex, std::vector<uint32_t> polyline, const std::set<uint32_t>& polygon) const
+{
+	int i = 0;
+	for (uint32_t neighbour : neighboursTable[currentVertex])
+	{
+		if (polygon.find(neighbour) != polygon.end() && std::find(polyline.begin(), polyline.end(), neighbour) == polyline.end())
+		{
+			std::vector newPolyline = polyline;
+			newPolyline.push_back(neighbour);
+			if (newPolyline.size() == polygon.size())
+			{
+				return newPolyline;
+			}
+			else
+			{
+				newPolyline = findOrderedPolyline(neighboursTable, neighbour, newPolyline, polygon);
+				if (newPolyline.size() == polygon.size())
+					return newPolyline;
+			}
+		}
+		++i;
+	}
+
+	return polyline;
 }
 
 std::vector<ModelOptimizer::Solution> ModelOptimizer::nextGeneration(const std::vector<Solution> &population, const TwoDimVector<uint32_t> &paretoFronts)

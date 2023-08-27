@@ -4,13 +4,14 @@
 #include "Cala/Utility/ModelLoader.h"
 #include <iostream>
 #include <filesystem>
+#include <numeric>
 
 using namespace Cala;
 
 MyApplication::MyApplication() : 
         BaseApplication(IWindow::Specification("EvolutionaryMeshSimplification", 1024, 768, 4)), 
         sphereMesh(Model().loadSphere()),
-        lightRenderable(sphereMesh, Transformation().translate(glm::vec3(0.f, 15.f, 15.f)).scale(0.5f), glm::vec4(1.f)),
+        lightRenderable(sphereMesh, Transformation().translate(glm::vec3(0.f, 30.f, 0.f)).scale(0.5f), glm::vec4(1.f)),
         lightSource(LightRenderer::Light::Type::Point, lightRenderable.transformation, 1.f, lightRenderable.color, 0.f, false)
 {
     camera.setPosition(glm::vec3(0.f, 15.f, 25.f));
@@ -75,20 +76,12 @@ MyApplication::MyApplication() :
     uint32_t counter = 1;
     Cala::ModelLoader modelLoader(false);
     modelLoader.loadFromObj(assetsDir / modelPath);
-    std::vector<Cala::Model> models = modelLoader.getModels();
-    for (auto& model : models)
+    Cala::Model originalModel = modelLoader.getModels()[0];
+    auto lodLevels = modelOptimizer.optimize(&originalModel, generationCount, populationCount, offspringCount, mutationProbability, tournamentSelectionParticipantsCount);
+    for (auto& level : lodLevels)
     {
-        modelOptimizer.optimize(&model, generationCount, populationCount, offspringCount, mutationProbability, tournamentSelectionParticipantsCount);
-        model.createGPUVertexData();
-        meshes.emplace_back(model, false, true);
-    }
-
-    // Renderables
-    int i = 0;
-    for (const Mesh& mesh : meshes)
-    {
-        renderables.emplace_back(mesh, Transformation(),
-            glm::vec4(0.8f, 0.8f, 0.8f, 1.f), nullptr, nullptr, nullptr, 0.2f, 0.7f, 0.9f, 10.f);
+        level.createGPUVertexData();
+        lodMeshes.emplace_back(level, false, true);
     }
 
     api->enableSetting(GraphicsAPI::Multisampling);
@@ -106,11 +99,48 @@ void MyApplication::loop()
             api->setPolygonFillingMode(GraphicsAPI::Front, GraphicsAPI::Fill);
     }
 
+    if (window->getIO().isKeyTapped(IIOSystem::KEY_L))
+        lod = !lod;
+
     api->clearFramebuffer();
 
     lightRenderer.pushLight(lightSource);
-    for (const auto& renderable : renderables)
-        lightRenderer.pushRenderable(renderable);
+
+    for (int i = 0; i <= 20; i++)
+    {
+        for (int j = 0; j <= 20; j++)
+        {
+            Mesh* mesh;
+            glm::vec3 meshPosition(-80.f + i * 8.f, 0.f, -80.f + j * 8.f);
+
+            if (!lod)
+            {
+                mesh = &lodMeshes[0];
+            }
+            else
+            {
+                float distance = glm::distance(meshPosition, camera.getPosition());
+                int threshold = (int)(100.f / lodMeshes.size());
+                int index = glm::clamp((int)(distance / threshold), 0, (int)lodMeshes.size() - 1);
+                mesh = &lodMeshes[index];
+            }
+
+            lightRenderer.pushRenderable(
+                Cala::LightRenderer::Renderable(
+                    *mesh, 
+                    Cala::Transformation().translate(meshPosition),
+                    glm::vec4(1.f),
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    0.2f,
+                    0.8f,
+                    0.8f,
+                    20.f
+                )
+            );
+        }
+    }
 
     lightRenderer.setupCamera(camera);
     lightRenderer.render(api.get(), nullptr);
@@ -118,4 +148,8 @@ void MyApplication::loop()
     simpleRenderer.setupCamera(camera);
     simpleRenderer.pushRenderable(lightRenderable);
     simpleRenderer.render(api.get(), nullptr);
-}
+    
+    frameTimes[frame] = time.getFrameRate();
+    frame = (frame+1) % 50;
+    std::cout << std::accumulate(frameTimes.begin(), frameTimes.end(), 0.f) / 50 << std::endl; 
+ }

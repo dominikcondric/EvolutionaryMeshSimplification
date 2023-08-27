@@ -25,7 +25,7 @@ private:
 public:
 	ModelOptimizer() = default;
 	~ModelOptimizer() = default;
-    void optimize(Cala::Model *model, uint32_t _generationCount, uint32_t _populationCount, uint32_t _offspringCount, float _mutationProbability, uint32_t _tournamentParticipantsCount);
+    std::vector<Cala::Model> optimize(const Cala::Model *model, uint32_t _generationCount, uint32_t _populationCount, uint32_t _offspringCount, float _mutationProbability, uint32_t _tournamentParticipantsCount);
 
 private:
 	uint32_t generationCount;
@@ -34,7 +34,7 @@ private:
 	uint32_t offspringCount;
 	uint32_t tournamentParticipantsCount;
 
-    void regenerateModel(Cala::Model *model, Solution& solution) const;
+    Cala::Model regenerateModel(const Cala::Model *model, Solution& solution) const;
     std::vector<Solution> generateInitialPopulation(const Cala::Model* model, uint32_t populationCount) const;
 	ModelOptimizer::Solution generateGenotype(const Cala::Model* model) const;
 	void generateIndicesAndError(const Cala::Model* model, Solution& solution) const;
@@ -49,4 +49,5 @@ private:
     void printParetoFronts(const std::vector<std::vector<uint32_t>>& paretoFronts, const std::vector<Solution>& population) const;
 	void createPolygon(const std::vector<std::set<uint32_t>>& neighboursTable, std::unordered_set<uint32_t>& verticesToRemove, uint32_t polygonVertex, std::unordered_set<uint32_t>& removedVerticesPerPolygon, std::set<uint32_t>& polygonSet) const;
 	void plotParetoFronts(const TwoDimVector<uint32_t> &paretoFronts, const std::vector<Solution>& population, uint32_t originalVertexCount) const;
+	std::vector<uint32_t> findOrderedPolyline(const std::vector<std::set<uint32_t>>& neighboursTable, uint32_t currentVertex, std::vector<uint32_t> polyline, const std::set<uint32_t>& polygon) const;
 };

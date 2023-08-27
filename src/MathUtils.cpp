@@ -1,7 +1,7 @@
 #include "MathUtils.h"
 #include <glm/geometric.hpp>
+#include <CGAL/Simple_cartesian.h>
 #include <CGAL/Advancing_front_surface_reconstruction.h>
-#include "CGAL/Simple_cartesian.h"
 
 glm::vec3 MathUtils::calculateTriangleNormal(const glm::vec3 triangleVertices[3])
 {
@@ -18,7 +18,6 @@ std::vector<std::array<uint64_t, 3>> MathUtils::triangulatePolygon(const std::ve
     using Point3 = CGAL::Simple_cartesian<float>::Point_3;
 	std::vector<Point3> cgalPolygonVertices;
 	std::vector<std::array<uint64_t, 3>> cgalTriangleIndices;
-	std::vector<uint32_t> triangleIndices;
 	for (const uint32_t vertex : polygonVertices)
 		cgalPolygonVertices.emplace_back(positions[vertex].x, positions[vertex].y, positions[vertex].z);
 
@@ -29,7 +28,7 @@ std::vector<std::array<uint64_t, 3>> MathUtils::triangulatePolygon(const std::ve
         10.0, 
         0.8
 	);
-	
+
 	return cgalTriangleIndices;
 }
 
